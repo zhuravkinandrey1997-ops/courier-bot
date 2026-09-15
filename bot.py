@@ -17,13 +17,12 @@ from aiogram.types import (
 import gspread
 from google.oauth2.service_account import Credentials
 
-# Переменные окружения
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 SPREADSHEET_NAME = os.getenv("SPREADSHEET_NAME", "Касса Курьера")
 GOOGLE_CREDS_RAW = os.getenv("GOOGLE_CREDENTIALS")
+ADMIN_CHAT_ID = os.getenv("ADMIN_CHAT_ID")
 PORT = int(os.getenv("PORT", 10000))
 
-# Подключение к Google Таблицам
 scopes = [
     "https://www.googleapis.com/auth/spreadsheets",
     "https://www.googleapis.com/auth/drive",
@@ -39,7 +38,6 @@ bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
 
 
-# Состояния FSM
 class ExpenseStates(StatesGroup):
     waiting_comment = State()
     waiting_currency = State()
@@ -59,7 +57,6 @@ class ExchangeStates(StatesGroup):
     waiting_to_amount = State()
 
 
-# Главное меню
 def get_main_menu():
     return InlineKeyboardMarkup(
         inline_keyboard=[
@@ -87,7 +84,6 @@ def get_main_menu():
     )
 
 
-# Выбор валюты
 def get_currency_menu(prefix: str):
     return InlineKeyboardMarkup(
         inline_keyboard=[
@@ -143,6 +139,16 @@ def format_balance_msg(balances):
     )
 
 
+async def notify_admin(initiator_id: int, text: str):
+    if ADMIN_CHAT_ID and str(initiator_id) != str(ADMIN_CHAT_ID):
+        try:
+            await bot.send_message(
+                chat_id=int(ADMIN_CHAT_ID), text=text, parse_mode="Markdown"
+            )
+        except Exception:
+            pass
+
+
 @dp.message(CommandStart())
 async def cmd_start(message: Message, state: FSMContext):
     await state.clear()
@@ -190,14 +196,25 @@ async def expense_finish(message: Message, state: FSMContext):
             now,
         )
 
-        await message.answer(
-            f"✅ Расход зафиксирован: -{amount} {data['currency']}\n\n{format_balance_msg(new_bal)}",
-            parse_mode="Markdown",
-            reply_markup=get_main_menu(),
+        res_msg = (
+            f"✅ Расход зафиксирован: -{amount} {data['currency']}\n\n"
+            f"{format_balance_msg(new_bal)}"
         )
+        await message.answer(
+            res_msg, parse_mode="Markdown", reply_markup=get_main_menu()
+        )
+
+        admin_text = (
+            f"🔔 **Новая операция: Расход**\n"
+            f"👤 Сотрудник: {message.from_user.full_name}\n"
+            f"💸 Сумма: -{amount} {data['currency']}\n"
+            f"📝 Причина: {data['comment']}\n\n"
+            f"{format_balance_msg(new_bal)}"
+        )
+        await notify_admin(message.from_user.id, admin_text)
         await state.clear()
     except ValueError:
-        await message.answer("Пожалуйста, введите сумму числом (например: 15 или 3.50):")
+        await message.answer("Введите сумму числом (например: 15 или 3.50):")
 
 
 # --- 2. ПОПОЛНЕНИЕ ---
@@ -239,11 +256,22 @@ async def topup_finish(message: Message, state: FSMContext):
             now,
         )
 
-        await message.answer(
-            f"✅ Пополнение сохранено: +{amount} {data['currency']}\n\n{format_balance_msg(new_bal)}",
-            parse_mode="Markdown",
-            reply_markup=get_main_menu(),
+        res_msg = (
+            f"✅ Пополнение сохранено: +{amount} {data['currency']}\n\n"
+            f"{format_balance_msg(new_bal)}"
         )
+        await message.answer(
+            res_msg, parse_mode="Markdown", reply_markup=get_main_menu()
+        )
+
+        admin_text = (
+            f"🔔 **Новая операция: Пополнение**\n"
+            f"👤 Зафиксировал: {message.from_user.full_name}\n"
+            f"💰 Сумма: +{amount} {data['currency']}\n"
+            f"📥 Источник: {data['who']}\n\n"
+            f"{format_balance_msg(new_bal)}"
+        )
+        await notify_admin(message.from_user.id, admin_text)
         await state.clear()
     except ValueError:
         await message.answer("Введите сумму числом:")
@@ -316,13 +344,22 @@ async def ex_to_amount(message: Message, state: FSMContext):
             now,
         )
 
-        await message.answer(
+        res_msg = (
             f"✅ Обмен сохранен:\n"
             f"-{data['from_amount']} {data['from_curr']} ➔ +{to_amount} {data['to_curr']}\n\n"
-            f"{format_balance_msg(new_bal)}",
-            parse_mode="Markdown",
-            reply_markup=get_main_menu(),
+            f"{format_balance_msg(new_bal)}"
         )
+        await message.answer(
+            res_msg, parse_mode="Markdown", reply_markup=get_main_menu()
+        )
+
+        admin_text = (
+            f"🔔 **Новая операция: Обмен валюты**\n"
+            f"👤 Сотрудник: {message.from_user.full_name}\n"
+            f"🔄 Обмен: -{data['from_amount']} {data['from_curr']} ➔ +{to_amount} {data['to_curr']}\n\n"
+            f"{format_balance_msg(new_bal)}"
+        )
+        await notify_admin(message.from_user.id, admin_text)
         await state.clear()
     except ValueError:
         await message.answer("Введите сумму числом:")
@@ -340,7 +377,6 @@ async def check_balance(cb: CallbackQuery):
     await cb.answer()
 
 
-# Простой HTTP хэндлер для Render Health Check
 async def handle_ping(request):
     return web.Response(text="Bot is running!")
 
@@ -353,7 +389,6 @@ async def start_web_server():
     await runner.setup()
     site = web.TCPSite(runner, "0.0.0.0", PORT)
     await site.start()
-    print(f"Web server started on port {PORT}")
 
 
 async def main():
