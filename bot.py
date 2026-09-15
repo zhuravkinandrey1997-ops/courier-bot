@@ -11,7 +11,9 @@ from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import (
     InlineKeyboardButton,
     InlineKeyboardMarkup,
+    KeyboardButton,
     Message,
+    ReplyKeyboardMarkup,
     CallbackQuery,
 )
 import gspread
@@ -57,30 +59,14 @@ class ExchangeStates(StatesGroup):
     waiting_to_amount = State()
 
 
-def get_main_menu():
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(
-                    text="💸 Потратил", callback_data="btn_expense"
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    text="💰 Пополнили", callback_data="btn_topup"
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    text="🔄 Обмен валюты", callback_data="btn_exchange"
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    text="📊 Баланс кассы", callback_data="btn_balance"
-                )
-            ],
-        ]
+def get_permanent_keyboard():
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="💸 Потратил"), KeyboardButton(text="💰 Пополнили")],
+            [KeyboardButton(text="🔄 Обмен валюты"), KeyboardButton(text="📊 Баланс кассы")],
+        ],
+        resize_keyboard=True,
+        persistent=True,
     )
 
 
@@ -88,20 +74,10 @@ def get_currency_menu(prefix: str):
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
-                InlineKeyboardButton(
-                    text="🇧🇾 BYN", callback_data=f"{prefix}_BYN"
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    text="💵 USD", callback_data=f"{prefix}_USD"
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    text="🇷🇺 RUB", callback_data=f"{prefix}_RUB"
-                )
-            ],
+                InlineKeyboardButton(text="🇧🇾 BYN", callback_data=f"{prefix}_BYN"),
+                InlineKeyboardButton(text="💵 USD", callback_data=f"{prefix}_USD"),
+                InlineKeyboardButton(text="🇷🇺 RUB", callback_data=f"{prefix}_RUB"),
+            ]
         ]
     )
 
@@ -111,9 +87,7 @@ def get_current_balance():
     return {row[0]: float(row[1]) for row in records}
 
 
-def update_balance_and_log(
-    user_name, op_type, curr_changes, comment, timestamp
-):
+def update_balance_and_log(user_name, op_type, curr_changes, comment, timestamp):
     for curr, amount in curr_changes.items():
         ws_ops.append_row([timestamp, user_name, op_type, curr, amount, comment])
 
@@ -153,16 +127,16 @@ async def notify_admin(initiator_id: int, text: str):
 async def cmd_start(message: Message, state: FSMContext):
     await state.clear()
     await message.answer(
-        "👋 Выберите действие с кассой:", reply_markup=get_main_menu()
+        "👋 Меню кассы закреплено внизу:",
+        reply_markup=get_permanent_keyboard(),
     )
 
 
 # --- 1. РАСХОД ---
-@dp.callback_query(F.data == "btn_expense")
-async def start_expense(cb: CallbackQuery, state: FSMContext):
-    await cb.message.answer("📝 На что потратили? Введите комментарий:")
+@dp.message(F.text == "💸 Потратил")
+async def start_expense(message: Message, state: FSMContext):
+    await message.answer("📝 На что потратили? Введите комментарий:")
     await state.set_state(ExpenseStates.waiting_comment)
-    await cb.answer()
 
 
 @dp.message(ExpenseStates.waiting_comment)
@@ -201,7 +175,7 @@ async def expense_finish(message: Message, state: FSMContext):
             f"{format_balance_msg(new_bal)}"
         )
         await message.answer(
-            res_msg, parse_mode="Markdown", reply_markup=get_main_menu()
+            res_msg, parse_mode="Markdown", reply_markup=get_permanent_keyboard()
         )
 
         admin_text = (
@@ -218,11 +192,10 @@ async def expense_finish(message: Message, state: FSMContext):
 
 
 # --- 2. ПОПОЛНЕНИЕ ---
-@dp.callback_query(F.data == "btn_topup")
-async def start_topup(cb: CallbackQuery, state: FSMContext):
-    await cb.message.answer("👤 Кто пополнил кассу? Введите имя/источник:")
+@dp.message(F.text == "💰 Пополнили")
+async def start_topup(message: Message, state: FSMContext):
+    await message.answer("👤 Кто пополнил кассу? Введите имя/источник:")
     await state.set_state(TopUpStates.waiting_who)
-    await cb.answer()
 
 
 @dp.message(TopUpStates.waiting_who)
@@ -261,7 +234,7 @@ async def topup_finish(message: Message, state: FSMContext):
             f"{format_balance_msg(new_bal)}"
         )
         await message.answer(
-            res_msg, parse_mode="Markdown", reply_markup=get_main_menu()
+            res_msg, parse_mode="Markdown", reply_markup=get_permanent_keyboard()
         )
 
         admin_text = (
@@ -278,15 +251,14 @@ async def topup_finish(message: Message, state: FSMContext):
 
 
 # --- 3. ОБМЕН ВАЛЮТЫ ---
-@dp.callback_query(F.data == "btn_exchange")
-async def start_exchange(cb: CallbackQuery, state: FSMContext):
-    await cb.message.answer(
+@dp.message(F.text == "🔄 Обмен валюты")
+async def start_exchange(message: Message, state: FSMContext):
+    await message.answer(
         "🔄 Какую валюту вы **сдали**?",
         reply_markup=get_currency_menu("ex_from"),
         parse_mode="Markdown",
     )
     await state.set_state(ExchangeStates.waiting_from_curr)
-    await cb.answer()
 
 
 @dp.callback_query(
@@ -350,7 +322,7 @@ async def ex_to_amount(message: Message, state: FSMContext):
             f"{format_balance_msg(new_bal)}"
         )
         await message.answer(
-            res_msg, parse_mode="Markdown", reply_markup=get_main_menu()
+            res_msg, parse_mode="Markdown", reply_markup=get_permanent_keyboard()
         )
 
         admin_text = (
@@ -366,15 +338,14 @@ async def ex_to_amount(message: Message, state: FSMContext):
 
 
 # --- 4. БАЛАНС ---
-@dp.callback_query(F.data == "btn_balance")
-async def check_balance(cb: CallbackQuery):
+@dp.message(F.text == "📊 Баланс кассы")
+async def check_balance(message: Message):
     balances = get_current_balance()
-    await cb.message.answer(
+    await message.answer(
         format_balance_msg(balances),
         parse_mode="Markdown",
-        reply_markup=get_main_menu(),
+        reply_markup=get_permanent_keyboard(),
     )
-    await cb.answer()
 
 
 async def handle_ping(request):
