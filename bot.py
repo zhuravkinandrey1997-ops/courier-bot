@@ -23,6 +23,7 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 SPREADSHEET_NAME = os.getenv("SPREADSHEET_NAME", "Касса Курьера")
 GOOGLE_CREDS_RAW = os.getenv("GOOGLE_CREDENTIALS")
 ADMIN_CHAT_ID = os.getenv("ADMIN_CHAT_ID")
+COURIER_CHAT_ID = os.getenv("COURIER_CHAT_ID", "5985644377")
 PORT = int(os.getenv("PORT", 10000))
 
 scopes = [
@@ -118,11 +119,26 @@ def format_balance_msg(balances):
     )
 
 
-async def notify_admin(initiator_id: int, text: str):
-    if ADMIN_CHAT_ID and str(initiator_id) != str(ADMIN_CHAT_ID):
+async def send_cross_notification(initiator_id: int, text: str):
+    """
+    Если действие делает админ -> шлем курьеру.
+    Если действие делает кто-то другой -> шлем админу.
+    """
+    recipients = []
+    str_init_id = str(initiator_id)
+
+    if ADMIN_CHAT_ID and str_init_id != str(ADMIN_CHAT_ID):
+        recipients.append(int(ADMIN_CHAT_ID))
+
+    if COURIER_CHAT_ID and str_init_id != str(COURIER_CHAT_ID):
+        # Если действие внесли вы (админ), курьер получит уведомление
+        if str_init_id == str(ADMIN_CHAT_ID):
+            recipients.append(int(COURIER_CHAT_ID))
+
+    for target_id in recipients:
         try:
             await bot.send_message(
-                chat_id=int(ADMIN_CHAT_ID), text=text, parse_mode="Markdown"
+                chat_id=target_id, text=text, parse_mode="Markdown"
             )
         except Exception:
             pass
@@ -183,14 +199,14 @@ async def expense_finish(message: Message, state: FSMContext):
             res_msg, parse_mode="Markdown", reply_markup=get_permanent_keyboard()
         )
 
-        admin_text = (
+        notify_text = (
             f"🔔 **Новая операция: Расход**\n"
             f"👤 Сотрудник: {message.from_user.full_name}\n"
             f"💸 Сумма: -{amount} {data['currency']}\n"
             f"📝 Причина: {data['comment']}\n\n"
             f"{format_balance_msg(new_bal)}"
         )
-        await notify_admin(message.from_user.id, admin_text)
+        await send_cross_notification(message.from_user.id, notify_text)
         await state.clear()
     except ValueError:
         await message.answer("Введите сумму числом (например: 15 или 3.50):")
@@ -242,14 +258,14 @@ async def topup_finish(message: Message, state: FSMContext):
             res_msg, parse_mode="Markdown", reply_markup=get_permanent_keyboard()
         )
 
-        admin_text = (
+        notify_text = (
             f"🔔 **Новая операция: Пополнение**\n"
             f"👤 Зафиксировал: {message.from_user.full_name}\n"
             f"💰 Сумма: +{amount} {data['currency']}\n"
             f"📥 Источник: {data['who']}\n\n"
             f"{format_balance_msg(new_bal)}"
         )
-        await notify_admin(message.from_user.id, admin_text)
+        await send_cross_notification(message.from_user.id, notify_text)
         await state.clear()
     except ValueError:
         await message.answer("Введите сумму числом:")
@@ -330,13 +346,13 @@ async def ex_to_amount(message: Message, state: FSMContext):
             res_msg, parse_mode="Markdown", reply_markup=get_permanent_keyboard()
         )
 
-        admin_text = (
+        notify_text = (
             f"🔔 **Новая операция: Обмен валюты**\n"
             f"👤 Сотрудник: {message.from_user.full_name}\n"
             f"🔄 Обмен: -{data['from_amount']} {data['from_curr']} ➔ +{to_amount} {data['to_curr']}\n\n"
             f"{format_balance_msg(new_bal)}"
         )
-        await notify_admin(message.from_user.id, admin_text)
+        await send_cross_notification(message.from_user.id, notify_text)
         await state.clear()
     except ValueError:
         await message.answer("Введите сумму числом:")
@@ -356,7 +372,10 @@ async def check_balance(message: Message):
 # --- 5. ПОИСК ПО РАСХОДАМ ---
 @dp.message(F.text == "🔍 Поиск по расходам")
 async def search_start(message: Message, state: FSMContext):
-    await message.answer("🔎 Введите слово или фразу для поиска по комментариям (например: `ступица`, `эвакуатор`, `такси`):", parse_mode="Markdown")
+    await message.answer(
+        "🔎 Введите слово или фразу для поиска по комментариям (например: `ступица`, `эвакуатор`, `такси`):",
+        parse_mode="Markdown",
+    )
     await state.set_state(SearchStates.waiting_query)
 
 
@@ -372,7 +391,6 @@ async def search_process(message: Message, state: FSMContext):
             await state.clear()
             return
 
-        # Индексы колонок: 0-Дата, 1-Сотрудник, 2-Тип, 3-Валюта, 4-Сумма, 5-Комментарий
         results = []
         for r in rows[1:]:
             if len(r) >= 6:
@@ -381,13 +399,21 @@ async def search_process(message: Message, state: FSMContext):
                     results.append(f"📅 `{date}` | 👤 {user}\n💸 `{amount} {curr}` — {comment}")
 
         if not results:
-            await message.answer(f"По запросу *«{message.text}»* среди расходов ничего не найдено.", parse_mode="Markdown", reply_markup=get_permanent_keyboard())
+            await message.answer(
+                f"По запросу *«{message.text}»* среди расходов ничего не найдено.",
+                parse_mode="Markdown",
+                reply_markup=get_permanent_keyboard(),
+            )
         else:
             header = f"🔍 **Результаты поиска по «{message.text}» ({len(results)} шт.):**\n\n"
             text_block = "\n\n".join(results[-20:])
             if len(results) > 20:
                 text_block += f"\n\n*(показаны последние 20 из {len(results)} записей)*"
-            await message.answer(header + text_block, parse_mode="Markdown", reply_markup=get_permanent_keyboard())
+            await message.answer(
+                header + text_block,
+                parse_mode="Markdown",
+                reply_markup=get_permanent_keyboard(),
+            )
     except Exception as e:
         await message.answer(f"Ошибка при поиске: {e}", reply_markup=get_permanent_keyboard())
 
