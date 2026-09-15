@@ -59,11 +59,16 @@ class ExchangeStates(StatesGroup):
     waiting_to_amount = State()
 
 
+class SearchStates(StatesGroup):
+    waiting_query = State()
+
+
 def get_permanent_keyboard():
     return ReplyKeyboardMarkup(
         keyboard=[
             [KeyboardButton(text="💸 Потратил"), KeyboardButton(text="💰 Пополнили")],
             [KeyboardButton(text="🔄 Обмен валюты"), KeyboardButton(text="📊 Баланс кассы")],
+            [KeyboardButton(text="🔍 Поиск по расходам")],
         ],
         resize_keyboard=True,
         persistent=True,
@@ -346,6 +351,47 @@ async def check_balance(message: Message):
         parse_mode="Markdown",
         reply_markup=get_permanent_keyboard(),
     )
+
+
+# --- 5. ПОИСК ПО РАСХОДАМ ---
+@dp.message(F.text == "🔍 Поиск по расходам")
+async def search_start(message: Message, state: FSMContext):
+    await message.answer("🔎 Введите слово или фразу для поиска по комментариям (например: `ступица`, `эвакуатор`, `такси`):", parse_mode="Markdown")
+    await state.set_state(SearchStates.waiting_query)
+
+
+@dp.message(SearchStates.waiting_query)
+async def search_process(message: Message, state: FSMContext):
+    query = message.text.strip().lower()
+    await message.answer("⏳ Ищу совпадения в таблице...")
+
+    try:
+        rows = ws_ops.get_all_values()
+        if len(rows) <= 1:
+            await message.answer("Таблица операций пока пуста.", reply_markup=get_permanent_keyboard())
+            await state.clear()
+            return
+
+        # Индексы колонок: 0-Дата, 1-Сотрудник, 2-Тип, 3-Валюта, 4-Сумма, 5-Комментарий
+        results = []
+        for r in rows[1:]:
+            if len(r) >= 6:
+                date, user, op_type, curr, amount, comment = r[0], r[1], r[2], r[3], r[4], r[5]
+                if op_type == "Расход" and query in comment.lower():
+                    results.append(f"📅 `{date}` | 👤 {user}\n💸 `{amount} {curr}` — {comment}")
+
+        if not results:
+            await message.answer(f"По запросу *«{message.text}»* среди расходов ничего не найдено.", parse_mode="Markdown", reply_markup=get_permanent_keyboard())
+        else:
+            header = f"🔍 **Результаты поиска по «{message.text}» ({len(results)} шт.):**\n\n"
+            text_block = "\n\n".join(results[-20:])
+            if len(results) > 20:
+                text_block += f"\n\n*(показаны последние 20 из {len(results)} записей)*"
+            await message.answer(header + text_block, parse_mode="Markdown", reply_markup=get_permanent_keyboard())
+    except Exception as e:
+        await message.answer(f"Ошибка при поиске: {e}", reply_markup=get_permanent_keyboard())
+
+    await state.clear()
 
 
 async def handle_ping(request):
