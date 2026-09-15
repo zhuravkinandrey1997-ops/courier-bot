@@ -2,6 +2,7 @@ import asyncio
 import json
 import os
 from datetime import datetime
+from aiohttp import web
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import CommandStart
 from aiogram.fsm.context import FSMContext
@@ -16,10 +17,11 @@ from aiogram.types import (
 import gspread
 from google.oauth2.service_account import Credentials
 
-# Переменные окружения (задаются в Render)
+# Переменные окружения
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 SPREADSHEET_NAME = os.getenv("SPREADSHEET_NAME", "Касса Курьера")
 GOOGLE_CREDS_RAW = os.getenv("GOOGLE_CREDENTIALS")
+PORT = int(os.getenv("PORT", 10000))
 
 # Подключение к Google Таблицам
 scopes = [
@@ -37,7 +39,7 @@ bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
 
 
-# Состояния диалога (FSM)
+# Состояния FSM
 class ExpenseStates(StatesGroup):
     waiting_comment = State()
     waiting_currency = State()
@@ -338,7 +340,24 @@ async def check_balance(cb: CallbackQuery):
     await cb.answer()
 
 
+# Простой HTTP хэндлер для Render Health Check
+async def handle_ping(request):
+    return web.Response(text="Bot is running!")
+
+
+async def start_web_server():
+    app = web.Application()
+    app.router.add_get("/", handle_ping)
+    app.router.add_get("/healthz", handle_ping)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "0.0.0.0", PORT)
+    await site.start()
+    print(f"Web server started on port {PORT}")
+
+
 async def main():
+    await start_web_server()
     print("Бот успешно запущен на Render!")
     await dp.start_polling(bot)
 
