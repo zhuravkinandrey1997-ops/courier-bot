@@ -26,7 +26,7 @@ CHAT_B2_ID = -1004301816476   # Чат Б-2 (Диспетчер 2 - Настя)
 CHAT_C_ID = -1004393379168    # Кремль (распределение агентам)
 CHAT_D_ID = -1004303017205    # Чат Г (отчеты и результаты)
 
-# Администраторы, управляющие переключением диспетчеров в Чате А
+# Администраторы маршрутизации
 ALLOWED_ROUTE_MANAGERS = ["andreyzhuravkin", "ms_ksunchik", "dred_rock"]
 ALLOWED_ADMIN_IDS = [661842368]
 
@@ -107,20 +107,23 @@ def is_route_manager(user_id, username):
     u = (username or "").lstrip('@').lower()
     return (user_id in ALLOWED_ADMIN_IDS) or (u in [m.lower() for m in ALLOWED_ROUTE_MANAGERS])
 
-# --- ПОСТОЯННАЯ КЛАВИАТУРА ВНИЗУ ЭКРАНА В ЧАТЕ А ---
+# --- СТАЦИОНАРНОЕ МЕНЮ ВНИЗУ ЧАТА А ---
 def get_chat_a_bottom_keyboard():
     route = get_dispatch_route()
     b1_icon = "🟢" if route == "b1" else "⚪️"
     b2_icon = "🟢" if route == "b2" else "⚪️"
     all_icon = "🟢" if route == "all" else "⚪️"
 
-    markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
+    markup = types.ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=False)
     markup.row(
         types.KeyboardButton(f"{b1_icon} Диспетчер 1 (Чат Б)"),
         types.KeyboardButton(f"{b2_icon} Диспетчер 2 (Чат Б-2)")
     )
     markup.row(
         types.KeyboardButton(f"{all_icon} Оба диспетчера (параллельно)")
+    )
+    markup.row(
+        types.KeyboardButton("🔄 Обновить меню")
     )
     return markup
 
@@ -652,23 +655,25 @@ def render_routing_menu():
     )
     return text, markup
 
-# --- ПЕРЕКЛЮЧЕНИЕ ЧЕРЕЗ СТАЦИОНАРНЫЕ КНОПКИ ВНИЗУ ЧАТА А ---
-@bot.message_handler(func=lambda msg: msg.chat.id == CHAT_A_ID and any(k in msg.text for k in ["Диспетчер 1", "Диспетчер 2", "Оба диспетчера"]))
+# --- ОБРАБОТКА НАЖАТИЯ СТАЦИОНАРНЫХ КНОПОК В ЧАТЕ А ---
+@bot.message_handler(func=lambda msg: msg.chat.id == CHAT_A_ID and any(k in (msg.text or "") for k in ["Диспетчер 1", "Диспетчер 2", "Оба диспетчера", "Обновить меню"]))
 def handle_chat_a_bottom_buttons(message):
     if not is_route_manager(message.from_user.id, message.from_user.username):
         bot.reply_to(message, "⛔ Управлять могут только @AndreyZhuravkin, @ms_ksunchik и @dred_rock")
         return
 
     text = message.text
-    if "Диспетчер 1" in text:
+    if "Обновить меню" in text:
+        route_text = "🔄 Меню обновлено."
+    elif "Диспетчер 1" in text:
         set_dispatch_route("b1")
-        route_text = "🟢 Режим включен: заявки идут **только Диспетчеру 1 (Чат Б)**!"
+        route_text = "🟢 Включен режим: **Только Диспетчер 1 (Чат Б)**"
     elif "Диспетчер 2" in text:
         set_dispatch_route("b2")
-        route_text = "🟢 Режим включен: заявки идут **только Диспетчеру 2 (Чат Б-2)**!"
+        route_text = "🟢 Включен режим: **Только Диспетчер 2 (Чат Б-2)**"
     else:
         set_dispatch_route("all")
-        route_text = "🔀 Режим включен: заявки дублируются **обоим диспетчерам одновременно**!"
+        route_text = "🔀 Включен режим: **Оба диспетчера (параллельно)**"
 
     refresh_route_board()
     kb = get_chat_a_bottom_keyboard()
@@ -704,8 +709,8 @@ def handle_route_commands(message):
     text, markup = render_routing_menu()
     kb = get_chat_a_bottom_keyboard()
     
-    bot.send_message(message.chat.id, text, reply_markup=kb, parse_mode="Markdown")
-    sent_inline = bot.send_message(message.chat.id, "👆 Вы также можете переключать режим кнопками в сообщении или внизу экрана:", reply_markup=markup)
+    bot.send_message(message.chat.id, "🎛 **Кнопки управления закреплены внизу экрана.**\n_Если они свернулись — нажмите значок четырёх квадратиков 🎛 справа в строке ввода._", reply_markup=kb, parse_mode="Markdown")
+    sent_inline = bot.send_message(message.chat.id, text, reply_markup=markup, parse_mode="Markdown")
     
     if cmd == '/pin_route':
         save_route_board_msg_id(sent_inline.message_id)
@@ -1386,7 +1391,7 @@ def handle_admin_agent_toggle(call):
     except Exception:
         pass
 
-# --- ОБРАБОТКА КОММЕНТАРИЕВ ПРИ МИМО / СРЫВЕ (РАЗДЕЛЕНИЕ: АЛИНА / НАСТЯ) ---
+# --- ОБРАБОТКА КОММЕНТАРИЕВ ПРИ МИМО / СРЫВЕ ---
 
 @bot.message_handler(func=lambda msg: msg.reply_to_message and msg.reply_to_message.message_id in pending_mimo_reasons and not msg.text.startswith('/'))
 def handle_manual_mimo_reason(message):
@@ -1443,7 +1448,7 @@ def handle_manual_mimo_reason(message):
         lead_num=lead_num, status="МИМО", phone=phone, address=address, fio=fio, reason=reason
     )
 
-# --- ПРИЕМ ФОТО ИЗ ЧАТА А (МАРШРУТИЗАЦИЯ В ЧАТ Б И ЧАТ Б-2) ---
+# --- ПРИЕМ ФОТО ИЗ ЧАТА А ---
 
 @bot.message_handler(content_types=['photo', 'document'])
 def handle_incoming_photo(message):
@@ -1755,7 +1760,7 @@ def handle_call_decision(call):
         prompt_msg = bot.send_message(call.message.chat.id, f"✏️ Напишите комментарий/причину «МИМО» по Заявке №{lead_num}:", reply_markup=types.ForceReply(selective=True))
         pending_mimo_reasons[prompt_msg.message_id] = {"lead_id": lead_num, "source": "chat_b"}
 
-# --- ФИНАЛЬНЫЙ СТАТУС ОТ АГЕНТА В ЛС (С ДУБЛИРОВАНИЕМ ДИСПЕТЧЕРУ) ---
+# --- ФИНАЛЬНЫЙ СТАТУС ОТ АГЕНТА В ЛС ---
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith(('deal_ok_', 'deal_fail_')))
 def handle_agent_final_status(call):
